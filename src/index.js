@@ -15,7 +15,7 @@ export { downloadOpportunityFiles }
 if (process.argv[1] && process.argv[1].endsWith("index.js")) {
   const opportunityUrlArg = process.env.OPPORTUNITY_URL || process.argv[2]
   const outputDirArg = process.env.OUTPUT_DIR || process.argv[3] || path.join(process.cwd(), "bc-downloads")
-  const headlessArg = false // Force headless false for debugging
+  const headlessArg = parseBool(process.env.HEADLESS ?? "false", false)
   const useSessionArg = parseBool(process.env.USE_SESSION ?? "true", true)
   run(opportunityUrlArg, outputDirArg, headlessArg, useSessionArg)
 }
