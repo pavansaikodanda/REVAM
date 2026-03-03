@@ -36,158 +36,108 @@ function log(level, message, data) {
 async function performLogin(page, email, password, timeout, headless, outputDir) {
   try {
     log("INFO", "Navigating to login page")
-    await page.goto(LOGIN_URL, { waitUntil: "domcontentloaded", timeout })
+    await page.goto(LOGIN_URL, { waitUntil: "networkidle", timeout: 60000 })
 
-    log("INFO", "Filling credentials")
+    log("INFO", "Filling email")
     const emailInput = page.locator('input[name="email"], input[type="email"]')
-    await emailInput.waitFor({ state: "visible", timeout: 15000 })
+    await emailInput.waitFor({ state: "visible", timeout: 30000 })
     await emailInput.fill(email)
-    log("INFO", "Filled email")
 
-    // Check if password field is already visible
-    const passwordField = page.locator('input[name="password"], input[type="password"]')
-    const isPassVisible = await passwordField.isVisible()
-
-    if (!isPassVisible) {
-      log("INFO", "Password field not visible, checking for 'Next' button")
-      const nextBtn = page.locator('button:has-text("Next"), button:has-text("Continue"), #btnNext, #verify_user_btn')
-      if (await nextBtn.isVisible()) {
-        log("INFO", "Clicking Next button")
-        await nextBtn.click()
-        log("INFO", "Clicked Next, waiting for password field")
-        
-        try {
-          await passwordField.waitFor({ state: 'visible', timeout: 15000 })
-        } catch (e) {
-          log("INFO", "Password field not found yet. Checking for a second 'Next' button.")
-          const secondNext = page.locator('button:has-text("Next"), button:has-text("Continue"), #btnNext, #verify_user_btn')
-          if (await secondNext.isVisible()) {
-            log("INFO", "Second Next button found. Clicking it.")
-            await secondNext.click()
-            await passwordField.waitFor({ state: 'visible', timeout: 15000 })
-          } else {
-            throw new Error("Could not find password field or second Next button")
-          }
-        }
-      }
+    log("INFO", "Checking for Next button")
+    const nextBtn = page.locator('button:has-text("Next"), button:has-text("Continue"), #btnNext, #verify_user_btn')
+    if (await nextBtn.isVisible()) {
+      await nextBtn.click()
+      await page.waitForTimeout(3000)
     }
 
-    log("INFO", "Attempting to fill password")
-    await passwordField.fill(password)
-    log("INFO", "Filled password")
+    log("INFO", "Waiting for password field")
+    const passwordField = page.locator('input[name="password"], input[type="password"]')
+    try {
+      await passwordField.waitFor({ state: "visible", timeout: 15000 })
+    } catch (e) {
+      log("INFO", "Password not visible, checking for second Next")
+      const secondNext = page.locator('button:has-text("Next"), button:has-text("Continue"), #btnNext, #verify_user_btn')
+      if (await secondNext.isVisible()) {
+        await secondNext.click()
+        await page.waitForTimeout(3000)
+      }
+      await passwordField.waitFor({ state: "visible", timeout: 15000 })
+    }
 
-    log("INFO", "Submitting login form")
+    log("INFO", "Filling password")
+    await passwordField.fill(password)
+    await page.waitForTimeout(1000)
+
+    log("INFO", "Submitting login")
     const submitBtn = page.locator('button[type="submit"], #btnSubmit')
     await submitBtn.click()
-    
-    log("INFO", "Submitted credentials, checking for 2FA or success")
+    await page.waitForTimeout(5000)
 
-    // Handle 2FA / Backup Code
-    log("INFO", "Checking for 2FA or successful login...")
-    try {
-      const start2fa = Date.now()
-      let is2fa = false
-      while (Date.now() - start2fa < 15000) {
-        if (page.isClosed()) break
-        const isConfirmSignIn = await page.locator('text="Confirm sign-in"').count() > 0
-        const isVerification = await page.locator('h1:has-text("Verification"), h2:has-text("Verification")').count() > 0
-        const isEnterCode = await page.locator('text="Enter code"').count() > 0
-        const isInput = await page.locator('input[name="otp"], input[name="code"], input[name="backupCode"]').count() > 0
-        
-        if (isConfirmSignIn || isVerification || isEnterCode || isInput) {
-          is2fa = true
-          break
-        }
-        if (page.url().includes("/projects") || page.url().includes("/dashboard")) {
-          log("INFO", "Login appeared to succeed without 2FA")
-          break
-        }
-        await page.waitForTimeout(1000)
+    log("INFO", "Checking for 2FA")
+    const is2faScreen = async () => {
+      const texts = ["Confirm sign-in", "Verification", "Enter code", "Enter backup code"]
+      for (const t of texts) {
+        if (await page.locator(`text="${t}"`).count() > 0) return true
+      }
+      return await page.locator('input[name*="code"], input[id*="code"], input[type="tel"]').count() > 0
+    }
+
+    if (await is2faScreen()) {
+      log("INFO", "2FA Screen Detected")
+      const backupLink = page.locator('a:has-text("Use a backup code"), button:has-text("Use a backup code"), text="Use backup code"')
+      if (await backupLink.isVisible()) {
+        log("INFO", "Clicking backup link")
+        await backupLink.click()
+        await page.waitForTimeout(5000)
       }
 
-      if (is2fa && !page.isClosed()) {
-        log("INFO", "2FA screen detected")
-        const backupLink = page.locator('a:has-text("Use a backup code"), button:has-text("Use a backup code")')
-        if (await backupLink.isVisible()) {
-          log("INFO", "Clicking 'Use a backup code' link")
-          await backupLink.click()
-          try {
-            await page.waitForSelector('input[name="backupCode"], input[id="backupCode"]', { timeout: 10000 })
-          } catch (e) {}
+      const backupInput = page.locator('input[name*="code"], input[id*="code"], input[aria-label*="code"], input[type="text"], input[type="tel"]')
+      if (await backupInput.count() > 0) {
+        let code = getBackupCode()
+        log("INFO", "Entering code", { code })
+        await backupInput.first().focus()
+        // Always strip hyphen for multi-box UIs
+        const cleanCode = code.replace("-", "")
+        log("INFO", "Typing cleaned code", { cleanCode })
+        await page.keyboard.type(cleanCode, { delay: 200 })
+        await page.waitForTimeout(2000)
+
+        const next = page.locator('button:has-text("Next"), button:has-text("Verify"), button:has-text("Submit"), button[type="submit"]')
+        if (await next.isVisible()) {
+          log("INFO", "Clicking Next on 2FA")
+          await next.click()
+        } else {
+          log("INFO", "Pressing Enter on 2FA")
+          await page.keyboard.press("Enter")
         }
+        await page.waitForTimeout(5000)
 
-        const backupInput = page.locator('input[name="backupCode"], input[id="backupCode"]')
-        if (await backupInput.count() > 0) {
-          const codeToUse = getBackupCode()
-          log("INFO", "Entering backup code", { code: codeToUse })
-          await backupInput.first().fill(codeToUse)
-          await page.waitForTimeout(1000)
-
-          const verifyBtn = page.locator('button:has-text("Verify"), button:has-text("Submit"), button:has-text("Next"), button[type="submit"]')
-          if (await verifyBtn.isVisible()) {
-            await verifyBtn.click()
-            log("INFO", "Submitted backup code")
-          } else {
-            await page.keyboard.press('Enter')
-          }
-          
-          log("INFO", "Waiting for navigation after 2FA submission")
-          try {
-            await page.waitForLoadState("networkidle", { timeout: 15000 })
-          } catch (e) {}
-
-          if (page.isClosed()) return
-
-          let currentUrl = page.url()
-          if (currentUrl.includes("join-rfp") || await page.locator('text="Save new backup code"').count() > 0) {
-            log("INFO", "On new code screen")
-            const eyeIcon = page.locator('button[aria-label*="Show"], button[aria-label*="Reveal"], span[class*="eye"], svg[data-icon*="eye"], i[class*="eye"]')
-            let newCode = null
-            const start = Date.now()
-            let clickedEye = false
-            while (Date.now() - start < 15000) {
-              if (page.isClosed()) break
-              let bodyText = await page.innerText("body")
-              const codePattern = /[A-Z0-9]{4}-[A-Z0-9]{4}/g
-              const matches = [...bodyText.matchAll(codePattern)]
-              const candidates = matches.map(m => m[0]).filter(c => c !== codeToUse)
-              if (candidates.length > 0) {
-                newCode = candidates[0]
-                break
-              }
-              if (!clickedEye && await eyeIcon.count() > 0 && await eyeIcon.first().isVisible()) {
-                await eyeIcon.first().click()
-                clickedEye = true
-              }
-              await page.waitForTimeout(1000)
-            }
-            if (newCode) {
-              saveBackupCode(newCode)
-              log("INFO", "Captured new backup code", { newCode })
-              try {
-                const checkbox = page.locator('input[type="checkbox"], label:has-text("I saved my backup code")')
-                if (await checkbox.count() > 0) await checkbox.first().click()
-              } catch (e) {}
-            }
+        // Capture new backup code
+        log("INFO", "Checking for new backup code")
+        const codePattern = /[A-Z0-9]{4}-[A-Z0-9]{4}/g
+        const start = Date.now()
+        while (Date.now() - start < 20000) {
+          const bodyText = await page.innerText("body")
+          const matches = [...bodyText.matchAll(codePattern)]
+          const candidates = matches.map(m => m[0]).filter(c => c !== code)
+          if (candidates.length > 0) {
+            const newCode = candidates[0]
+            saveBackupCode(newCode)
+            log("INFO", "Captured new backup code", { newCode })
+            
+            const checkbox = page.locator('input[type="checkbox"], label:has-text("I saved my backup code")')
+            if (await checkbox.count() > 0) await checkbox.first().click()
             const continueBtn = page.locator('button:has-text("Continue"), button:has-text("Done"), button:has-text("Next")')
             if (await continueBtn.isVisible()) await continueBtn.click()
+            break
           }
+          await page.waitForTimeout(1000)
         }
+        await page.waitForTimeout(5000)
       }
-    } catch (e) {
-      log("WARN", "2FA handling error", { message: e.message })
     }
-
-    if (page.isClosed()) return
-    log("INFO", "Waiting for post-login navigation")
-    try {
-      await page.waitForLoadState("networkidle", { timeout: 30000 })
-    } catch (e) {}
   } catch (err) {
-    log("ERROR", "Login failed", { message: err.message })
-    if (!page.isClosed()) {
-      fs.writeFileSync("debug.html", await page.content())
-    }
+    log("ERROR", "performLogin failed", { message: err.message })
     throw err
   }
 }
@@ -384,11 +334,25 @@ export async function downloadOpportunityFiles({
     const finalPath = path.join(outputDir, suggested)
     await download.saveAs(finalPath)
     log("INFO", "Download complete", { path: finalPath })
+    
+    if (!headless) {
+      log("INFO", "Keeping browser open for 5 minutes so you can see the result...")
+      await page.waitForTimeout(300000)
+    }
+    
     return { success: true, downloadedFiles: [finalPath], newBackupCode: getBackupCode() }
   } catch (err) {
     log("ERROR", "Automation failed", { message: err.message })
+    if (!headless) {
+        log("INFO", "Error occurred. Keeping browser open for 5 minutes for debugging...")
+        await page.waitForTimeout(300000)
+    }
     return { success: false, error: err.message }
   } finally {
+    if (headless) {
+        if (context) await context.close()
+        if (browser) await browser.close()
+    }
     log("INFO", "Finished execution")
   }
 }
