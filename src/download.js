@@ -497,15 +497,29 @@ export async function downloadOpportunityFiles({
        // Navigate again after re-login
        log("INFO", "Re-navigating to files page")
        await page.goto(opportunityUrl, { waitUntil: "domcontentloaded", timeout: navTimeoutMs })
+    } else if (currentUrl.includes("join-rfp")) {
+        log("INFO", "Landed on Join RFP page, attempting to accept invitation")
+        try {
+            const acceptBtn = page.locator('button:has-text("Accept Invitation"), button:has-text("View Opportunity"), a:has-text("I’ve used BuildingConnected before")')
+            if (await acceptBtn.count() > 0 && await acceptBtn.first().isVisible()) {
+                log("INFO", "Clicking Accept/View button on Join RFP page")
+                await acceptBtn.first().click()
+                await page.waitForLoadState("networkidle", { timeout: 15000 })
+                log("INFO", "Navigation after Join RFP click complete", { newUrl: page.url() })
+            }
+        } catch (e) {
+            log("WARN", "Error handling Join RFP page", { error: e.message })
+        }
     } else {
         log("INFO", "Landed on page", { currentUrl })
     }
 
-    let filesReady = page.locator('button:has-text("Download All")')
+    let filesReady = page.locator('button:has-text("Download All"), button:has-text("Download all")')
     try {
-      await filesReady.waitFor({ timeout: Math.min(waitTimeoutMs, 10000) })
+      await filesReady.waitFor({ state: 'visible', timeout: Math.min(waitTimeoutMs, 10000) })
     } catch {
-      const filesTab = page.locator('a:has-text("Files"), button:has-text("Files"), div[role="tab"]:has-text("Files")')
+      log("INFO", "Download All button not visible immediately, checking for Files tab or sub-navigation")
+      const filesTab = page.locator('a:has-text("Files"), button:has-text("Files"), div[role="tab"]:has-text("Files"), [data-test="files-tab"]')
       const count = await filesTab.count()
       if (count > 0) {
         log("INFO", "Clicking Files tab fallback")
@@ -514,32 +528,46 @@ export async function downloadOpportunityFiles({
              if (await filesTab.nth(i).isVisible()) {
                  await filesTab.nth(i).click({ timeout: 10000 })
                  log("INFO", "Clicked a visible Files tab")
+                 // Small wait for tab content to load
+                 await page.waitForTimeout(2000)
                  break
              }
         }
       }
-      filesReady = page.locator('button:has-text("Download All")')
+      filesReady = page.locator('button:has-text("Download All"), button:has-text("Download all")')
       try {
-          await filesReady.waitFor({ timeout: 15000 })
+          await filesReady.waitFor({ state: 'visible', timeout: 15000 })
       } catch (e) {
-          // If "Download All" is not found, maybe we are on the files tab but the button has a different selector or text
-          // Let's check for any download icon or button
-          const dlIcon = page.locator('button i.icon-download, button svg[data-icon="download"]')
-            if (await dlIcon.count() > 0) {
-                log("INFO", "Found generic download icon/button")
-                filesReady = dlIcon.first().locator('..') // Parent button
-            } else {
-                log("WARN", "Download All button not found. Dumping page content.")
-                fs.writeFileSync("debug-files-page.html", await page.content())
-                
-                // Check if we are back on login page
-                const title = await page.title()
-                if (title.includes("Login") || title.includes("Sign In")) {
-                    log("ERROR", "Redirected to Login page unexpectedly")
-                }
-                
-                throw e
-            }
+          // Check for sub-navigation or "Documents" which is common in some RFP views
+          const docTab = page.locator('a:has-text("Documents"), [data-test="documents-tab"]')
+          if (await docTab.count() > 0 && await docTab.first().isVisible()) {
+              log("INFO", "Clicking Documents tab fallback")
+              await docTab.first().click()
+              await page.waitForTimeout(2000)
+          }
+
+          filesReady = page.locator('button:has-text("Download All"), button:has-text("Download all")')
+          try {
+              await filesReady.waitFor({ state: 'visible', timeout: 10000 })
+          } catch (e2) {
+              // If "Download All" is still not found, check for generic icons
+              const dlIcon = page.locator('button i.icon-download, button svg[data-icon="download"], button[aria-label*="Download"]')
+              if (await dlIcon.count() > 0 && await dlIcon.first().isVisible()) {
+                  log("INFO", "Found generic download icon/button")
+                  filesReady = dlIcon.first()
+              } else {
+                  log("WARN", "Download All button not found. Dumping page content.")
+                  fs.writeFileSync("debug-files-page.html", await page.content())
+                  
+                  // Check if we are back on login page
+                  const title = await page.title()
+                  if (title.includes("Login") || title.includes("Sign In")) {
+                      log("ERROR", "Redirected to Login page unexpectedly")
+                  }
+                  
+                  throw e2
+              }
+          }
         }
     }
     log("INFO", "Triggering download")
