@@ -1,0 +1,83 @@
+name: Salesforce Triggered Automation
+
+on:
+  repository_dispatch:
+    types: [salesforce_trigger]
+  workflow_dispatch:
+    inputs:
+      backupCode:
+        description: 'Current Backup Code'
+        required: true
+      opportunityUrl:
+        description: 'Opportunity URL'
+        required: true
+      salesforceRecordId:
+        description: 'Salesforce Record ID'
+        required: true
+
+jobs:
+  run-automation:
+    runs-on: ubuntu-latest
+    
+    env:
+      BC_EMAIL: ${{ secrets.BC_EMAIL }}
+      BC_PASSWORD: ${{ secrets.BC_PASSWORD }}
+      SF_INSTANCE_URL: ${{ secrets.SF_INSTANCE_URL }}
+      SF_ACCESS_TOKEN: ${{ secrets.SF_ACCESS_TOKEN }}
+      SP_TENANT_ID: ${{ secrets.SP_TENANT_ID }}
+      SP_CLIENT_ID: ${{ secrets.SP_CLIENT_ID }}
+      SP_CLIENT_SECRET: ${{ secrets.SP_CLIENT_SECRET }}
+      SP_DRIVE_ID: ${{ secrets.SP_DRIVE_ID }}
+
+    steps:
+    - uses: actions/checkout@v3
+
+    - name: Setup Node.js
+      uses: actions/setup-node@v3
+      with:
+        node-version: '18'
+
+    - name: Install Dependencies
+      run: npm install
+
+    - name: Install Playwright Browsers
+      run: npx playwright install chromium
+
+    - name: Update Backup Code (from Trigger)
+      run: |
+        if [ "${{ github.event_name }}" == "repository_dispatch" ]; then
+          echo "${{ github.event.client_payload.backupCode }}" > .backup_code
+          echo "OPPORTUNITY_URL=${{ github.event.client_payload.opportunityUrl }}" >> $GITHUB_ENV
+        else
+          echo "${{ github.event.inputs.backupCode }}" > .backup_code
+          echo "OPPORTUNITY_URL=${{ github.event.inputs.opportunityUrl }}" >> $GITHUB_ENV
+        fi
+
+    - name: Run Automation Script
+      env:
+        OUTPUT_DIR: downloads
+        SF_RECORD_ID: ${{ github.event.client_payload.salesforceRecordId || github.event.inputs.salesforceRecordId }}
+      run: |
+        # Override the "headless: false" in your code just for this run
+        sed -i 's/headlessArg = false/headlessArg = true/g' src/index.js
+        
+        # Use our orchestration handler instead of just index.js
+        node src/github_handler.js
+
+    - name: Upload to SharePoint & Update Salesforce
+      run: |
+        # We can run a small script here to handle the post-processing
+        # Or you can integrate this logic into src/index.js directly
+        # For now, we assume the server.js logic is what you want, but adapted for CLI
+        
+        # This part requires a script that reads the new .backup_code and performs the API calls
+        # You can create a new file src/post_process.js that imports the same logic as server.js
+        echo "Post-processing placeholder..."
+
+    - name: Commit New Backup Code (CRITICAL)
+      run: |
+        git config --global user.name 'GitHub Action'
+        git config --global user.email 'action@github.com'
+        git add .backup_code
+        git commit -m "Update backup code [skip ci]" || echo "No changes to commit"
+        git push

@@ -1,0 +1,20 @@
+{
+  "name": "buildingconnected-playwright-automation",
+  "version": "0.1.0",
+  "description": "Playwright automation to login to BuildingConnected and download opportunity files.",
+  "type": "module",
+  "main": "src/index.js",
+  "scripts": {
+    "run": "node src/index.js"
+  },
+  "dependencies": {
+    "body-parser": "^2.2.2",
+    "dotenv": "^16.4.5",
+    "express": "^5.2.1",
+    "multer": "^2.0.2",
+    "playwright": "^1.45.0"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}
