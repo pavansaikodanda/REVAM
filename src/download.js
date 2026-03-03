@@ -33,7 +33,7 @@ function log(level, message, data) {
   } catch (e) {}
 }
 
-async function performLogin(page, email, password, timeout, headless) {
+async function performLogin(page, email, password, timeout, headless, outputDir) {
   try {
     log("INFO", "Navigating to login page")
     await page.goto(LOGIN_URL, { waitUntil: "domcontentloaded", timeout })
@@ -219,20 +219,21 @@ export async function downloadOpportunityFiles({
 
   log("INFO", "Start execution", { opportunityUrl, outputDir, headless, useSession })
   
+  const browser = await chromium.launch({
+    headless,
+    args: launchArgs,
+    slowMo: headless ? 0 : 500
+  })
+
   let context
   try {
     const userAgent = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
     
-    context = await chromium.launchPersistentContext(userDataDir, {
-      headless,
-      args: launchArgs,
-      acceptDownloads: true,
-      userAgent,
-      viewport: { width: 1280, height: 720 },
-      slowMo: headless ? 0 : 100
-    })
+    context = hasSession
+      ? await browser.newContext({ acceptDownloads: true, storageState: sessionPath, userAgent })
+      : await browser.newContext({ acceptDownloads: true, userAgent })
 
-    const page = context.pages().length > 0 ? context.pages()[0] : await context.newPage()
+    const page = await context.newPage()
     
     async function checkForCaptcha(page, contextStr) {
       const captcha = page.locator('iframe[src*="captcha"], iframe[title*="reCAPTCHA"], div:has-text("Security check"), div:has-text("CAPTCHA")')
@@ -255,7 +256,7 @@ export async function downloadOpportunityFiles({
 
     if (!hasSession) {
       log("INFO", "Logging in")
-      await performLogin(page, email, password, navTimeoutMs, headless)
+      await performLogin(page, email, password, navTimeoutMs, headless, outputDir)
       await checkForCaptcha(page, "post-login")
       
       if (useSession) {
@@ -300,7 +301,7 @@ export async function downloadOpportunityFiles({
     let currentUrl = page.url()
     if (currentUrl.includes("login") || currentUrl.includes("signin") || currentUrl.includes("auth")) {
        log("INFO", "Redirected to auth page, re-attempting login")
-       await performLogin(page, email, password, navTimeoutMs, headless)
+       await performLogin(page, email, password, navTimeoutMs, headless, outputDir)
        await checkForCaptcha(page, "re-login")
        
        if (useSession) {
@@ -322,7 +323,7 @@ export async function downloadOpportunityFiles({
                 await loginLink.first().click()
                 await page.waitForLoadState("networkidle")
                 if (page.url().includes("login") || page.url().includes("signin")) {
-                    await performLogin(page, email, password, navTimeoutMs, headless)
+                    await performLogin(page, email, password, navTimeoutMs, headless, outputDir)
                 }
             }
 
@@ -388,6 +389,6 @@ export async function downloadOpportunityFiles({
     log("ERROR", "Automation failed", { message: err.message })
     return { success: false, error: err.message }
   } finally {
-    if (context) await context.close()
+    log("INFO", "Finished execution")
   }
 }
