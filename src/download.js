@@ -1,4 +1,6 @@
-import { chromium } from "playwright"
+import { chromium } from "playwright-extra"
+import StealthPlugin from "puppeteer-extra-plugin-stealth"
+chromium.use(StealthPlugin())
 import fs from "fs"
 import path from "path"
 
@@ -123,6 +125,7 @@ async function handleAutodeskLogin(page, email, password, outputDir) {
   }
   await passwordField.first().click()
   await passwordField.first().fill(password)
+  await page.waitForTimeout(2000 + Math.random() * 1000)
   await page.waitForTimeout(500)
   await takeShot("autodesk_03_password_filled")
 
@@ -315,6 +318,12 @@ export async function downloadOpportunityFiles({
     })
 
     page = context.pages().length > 0 ? context.pages()[0] : await context.newPage()
+    await page.addInitScript(() => {
+      Object.defineProperty(navigator, 'webdriver', { get: () => undefined })
+      Object.defineProperty(navigator, 'plugins', { get: () => [1, 2, 3] })
+      Object.defineProperty(navigator, 'languages', { get: () => ['en-US', 'en'] })
+      window.chrome = { runtime: {} }
+    })
     page.on("close", () => log("WARN", "Page closed unexpectedly"))
     page.on("crash", () => log("ERROR", "Page crashed"))
 
@@ -369,6 +378,9 @@ while (Date.now() < maxAuthWait) {
     log("INFO", "State: Autodesk password screen")
     const passwordField = page.locator('input[type="password"]')
     await passwordField.fill(password)
+    await page.waitForTimeout(2000 + Math.random() * 1000) // add this line
+    await page.waitForTimeout(500)
+    await takeShot("autodesk_03_password_filled")
     await page.getByRole("button", { name: "Sign in", exact: true }).click()
 
   } else if (url.includes("autodesk") && (bodyText.includes("Sign in") || bodyText.includes("Email"))) {
