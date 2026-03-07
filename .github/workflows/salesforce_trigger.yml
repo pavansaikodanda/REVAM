@@ -28,6 +28,7 @@ jobs:
       SP_CLIENT_ID: ${{ secrets.SP_CLIENT_ID }}
       SP_CLIENT_SECRET: ${{ secrets.SP_CLIENT_SECRET }}
       SP_DRIVE_ID: ${{ secrets.SP_DRIVE_ID }}
+      PROXY_URL: ${{ secrets.PROXY_URL }}
 
     steps:
     - uses: actions/checkout@v3

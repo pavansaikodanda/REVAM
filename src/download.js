@@ -311,6 +311,7 @@ export async function downloadOpportunityFiles({
       headless,
       args: launchArgs,
       acceptDownloads: true,
+      proxy: { server: process.env.PROXY_URL },
       userAgent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
       viewport: { width: 1280, height: 720 },
       slowMo: headless ? 0 : 100,
