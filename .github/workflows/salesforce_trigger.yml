@@ -53,6 +53,10 @@ jobs:
           echo "OPPORTUNITY_URL=${{ github.event.inputs.opportunityUrl }}" >> $GITHUB_ENV
         fi
 
+    - name: Clear Session Data
+      run: |
+        rm -rf .playwright-data .bc-session.json
+
     - name: Run Automation Script
       env:
         OUTPUT_DIR: downloads
