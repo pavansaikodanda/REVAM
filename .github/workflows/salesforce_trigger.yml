@@ -68,6 +68,17 @@ jobs:
         # Use our orchestration handler instead of just index.js
         node src/github_handler.js
 
+    - name: Upload Debug Artifacts
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: bc-debug-artifacts
+        path: |
+          run_trace.log
+          downloads/**/*.png
+          downloads/**/*.log
+          downloads/**/*.txt
+
     - name: Upload to SharePoint & Update Salesforce
       run: |
         # We can run a small script here to handle the post-processing
