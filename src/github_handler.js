@@ -32,8 +32,11 @@ async function main() {
         console.log('[GH-HANDLER] Automation successful. Files downloaded:', result.downloadedFiles);
 
         // 2. Post-processing: SharePoint & Salesforce
-        const newCode = getBackupCode();
-        console.log(`[GH-HANDLER] New backup code captured: ${newCode}`);
+        const newBackupCode = result.newBackupCode || getBackupCode();
+        console.log(`[GH-HANDLER] New backup code captured: ${newBackupCode}`);
+        if (process.env.GITHUB_ENV) {
+            fs.appendFileSync(process.env.GITHUB_ENV, `newBackupCode=${newBackupCode}\n`);
+        }
 
         // --- SharePoint Upload ---
         for (const filePath of result.downloadedFiles) {
@@ -43,7 +46,7 @@ async function main() {
 
         // --- Salesforce Update ---
         if (salesforceRecordId) {
-            await updateSalesforce(salesforceRecordId, newCode);
+            await updateSalesforce(salesforceRecordId, newBackupCode);
         }
 
         console.log('[GH-HANDLER] Full workflow completed successfully.');
