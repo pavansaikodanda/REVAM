@@ -2,7 +2,6 @@ import { chromium } from "playwright"
 import fs from "fs"
 import path from "path"
 
-const LOGIN_URL = "https://app.buildingconnected.com/login"
 const BACKUP_CODE_FILE = path.join(process.cwd(), ".backup_code")
 const INITIAL_BACKUP_CODE = "KTMX-KIXP"
 
@@ -16,7 +15,7 @@ export function getBackupCode() {
 
 export function saveBackupCode(code) {
   fs.writeFileSync(BACKUP_CODE_FILE, code)
-  log("INFO", "Saved new backup code to .backup_code")
+  log("INFO", "Saved new backup code to .backup_code", { code })
 }
 
 function ensureDir(p) {
@@ -26,184 +25,246 @@ function ensureDir(p) {
 function log(level, message, data) {
   const ts = new Date().toISOString()
   const payload = data ? { ...data } : undefined
-  const logMsg = payload ? `[${ts}] ${level} ${message} ${JSON.stringify(payload)}\n` : `[${ts}] ${level} ${message}\n`
+  const logMsg = payload
+    ? `[${ts}] ${level} ${message} ${JSON.stringify(payload)}\n`
+    : `[${ts}] ${level} ${message}\n`
   console.log(logMsg.trim())
   try {
     fs.appendFileSync(path.join(process.cwd(), "run_trace.log"), logMsg)
   } catch (e) {}
 }
 
-async function performLogin(page, email, password, timeout, headless, outputDir) {
+function clearSessionData() {
+  const userDataDir = path.join(process.cwd(), ".playwright-data")
+  const sessionPath = path.join(process.cwd(), ".bc-session.json")
   try {
-    const takeShot = async (name) => {
-      try {
-        const shotPath = path.join(outputDir, `${name}.png`)
-        await page.screenshot({ path: shotPath, fullPage: true })
-        log("INFO", "Saved screenshot", { path: shotPath })
-      } catch (e) {}
-    }
-    const clickVisible = async (locator, shotName) => {
-      if (await locator.count() > 0 && await locator.first().isVisible()) {
-        await locator.first().scrollIntoViewIfNeeded()
-        await locator.first().click({ timeout: 10000 })
-        if (shotName) await takeShot(shotName)
-        return true
-      }
-      return false
-    }
-
-    log("INFO", "Filling email")
-    const emailInput = page.locator('input[name="email"], input[type="email"]')
-    await emailInput.waitFor({ state: "visible", timeout: 30000 })
-    await emailInput.fill(email)
-    await page.waitForTimeout(1000)
-    await takeShot("01_email_filled")
-
-    log("INFO", "Step 2: Advancing past email screen")
-    const nextBtn = page.getByRole("button", { name: "Next", exact: true })
-    const nextBtnUpper = page.getByRole("button", { name: "NEXT", exact: true })
-    const continueBtn = page.getByRole("button", { name: "Continue", exact: true })
-    const signInBtn = page.getByRole("button", { name: "Sign in", exact: true })
-    const signInBtnUpper = page.getByRole("button", { name: "Sign In", exact: true })
-    const passwordField = page.locator('input[name="password"], input[type="password"]')
-    const startAdvance = Date.now()
-    let advanced = false
-    while (Date.now() - startAdvance < 30000) {
-      if (page.isClosed()) break
-      if (await passwordField.isVisible()) {
-        advanced = true
-        break
-      }
-      if (await clickVisible(signInBtn, "02_after_sign_in") || await clickVisible(signInBtnUpper, "02_after_sign_in")) {
-        await page.waitForTimeout(3000)
-      } else if (await clickVisible(nextBtn, "02_after_next") || await clickVisible(nextBtnUpper, "02_after_next") || await clickVisible(continueBtn, "02_after_next")) {
-        await page.waitForTimeout(3000)
-      } else {
-        await emailInput.press("Enter")
-        await page.waitForTimeout(2000)
-      }
-    }
-    if (!advanced && !page.isClosed()) {
-      throw new Error("Password field never appeared")
-    }
-
-    log("INFO", "Step 3: Waiting for password and Sign In")
-    await passwordField.waitFor({ state: "visible", timeout: 30000 })
-
-    await passwordField.fill(password)
-    await page.waitForTimeout(1000)
-    await takeShot("03_password_filled")
-
-    const submitBtn = page.getByRole("button", { name: "Sign in", exact: true })
-    const submitBtnUpper = page.getByRole("button", { name: "Sign In", exact: true })
-    if (!(await clickVisible(submitBtn)) && !(await clickVisible(submitBtnUpper))) {
-      const fallbackSubmit = page.locator('button[type="submit"], #btnSubmit')
-      await fallbackSubmit.first().click()
-    }
-    await page.waitForTimeout(3000)
-    await takeShot("04_after_sign_in")
-    
-    log("INFO", "Step 4: Checking for 2FA screen and clicking 'Use a backup code'")
-    const twofaStart = Date.now()
-    let found2fa = false
-    while (Date.now() - twofaStart < 30000) {
-      if (page.isClosed()) break
-      const texts = ["Confirm sign-in", "Verification", "Enter code", "Enter backup code"]
-      for (const t of texts) {
-        if (await page.getByText(t, { exact: true }).count() > 0) {
-          found2fa = true
-          break
-        }
-      }
-      if (found2fa || await page.locator('input[type="tel"]').count() > 0) {
-        found2fa = true
-        break
-      }
-      await page.waitForTimeout(2000)
-    }
-
-    let completed2fa = false
-    if (found2fa && !page.isClosed()) {
-      const backupLink = page.getByRole("link", { name: "Use a backup code", exact: true })
-      const backupButton = page.getByRole("button", { name: "Use a backup code", exact: true })
-      if (await clickVisible(backupLink) || await clickVisible(backupButton)) {
-        log("INFO", "Clicking 'Use a backup code' link")
-        await page.waitForTimeout(5000)
-        await takeShot("05_after_backup_link")
-      }
-
-      const backupInputs = page.locator('input[type="tel"], input[type="text"], input[name="code"], input[id="code"], input[name="backupCode"], input[id="backupCode"]')
-      await backupInputs.first().waitFor({ state: "visible", timeout: 30000 })
-      if (await backupInputs.count() > 0) {
-        let code = getBackupCode()
-        log("INFO", "Entering backup code", { code })
-        const cleanCode = code.replace("-", "")
-        const inputCount = await backupInputs.count()
-        if (inputCount > 1) {
-          for (let i = 0; i < Math.min(inputCount, cleanCode.length); i++) {
-            await backupInputs.nth(i).focus()
-            await backupInputs.nth(i).fill(cleanCode[i])
-            await page.waitForTimeout(150)
-          }
-        } else {
-          await backupInputs.first().focus()
-          await page.keyboard.type(cleanCode, { delay: 250 })
-        }
-        await page.waitForTimeout(3000)
-        await takeShot("06_backup_code_typed")
-
-        const next2fa = page.getByRole("button", { name: "Next", exact: true })
-        const verifyBtn = page.getByRole("button", { name: "Verify", exact: true })
-        const submitBtn2 = page.getByRole("button", { name: "Submit", exact: true })
-        if (!(await clickVisible(next2fa)) && !(await clickVisible(verifyBtn)) && !(await clickVisible(submitBtn2))) {
-          await page.keyboard.press("Enter")
-        }
-        
-        log("INFO", "Step 5: Waiting for post-2FA screen (capture new code and Continue)")
-        await page.waitForTimeout(10000)
-        await takeShot("07_post_2fa")
-
-        log("INFO", "Scanning for new backup code")
-        const codePattern = /[A-Z0-9]{4}-[A-Z0-9]{4}/g
-        const bodyText = await page.innerText("body")
-        const matches = [...bodyText.matchAll(codePattern)]
-        const candidates = matches.map(m => m[0]).filter(c => c !== code)
-        
-        if (candidates.length > 0) {
-          const newCode = candidates[0]
-          saveBackupCode(newCode)
-          log("INFO", "Captured new backup code", { newCode })
-          await takeShot("08_new_backup_code")
-          
-          const checkbox = page.locator('input[type="checkbox"]')
-          if (await checkbox.count() > 0) {
-            await checkbox.first().click()
-          }
-          
-          const continueBtn2 = page.getByRole("button", { name: "Continue", exact: true })
-          const doneBtn = page.getByRole("button", { name: "Done", exact: true })
-          const nextBtn2 = page.getByRole("button", { name: "Next", exact: true })
-          if (!(await clickVisible(continueBtn2)) && !(await clickVisible(doneBtn)) && !(await clickVisible(nextBtn2))) {
-            await page.keyboard.press("Enter")
-          }
-          await page.waitForTimeout(5000)
-          await takeShot("09_after_continue")
-          completed2fa = true
-        }
-      }
-    }
-    return { completed2fa }
-  } catch (err) {
-    log("ERROR", "performLogin failed", { message: err.message })
-    throw err
+    if (fs.existsSync(userDataDir)) fs.rmSync(userDataDir, { recursive: true, force: true })
+    if (fs.existsSync(sessionPath)) fs.rmSync(sessionPath, { force: true })
+    log("INFO", "Cleared session data")
+  } catch (e) {
+    log("WARN", "Failed to clear session data", { message: e.message })
   }
+}
+
+/**
+ * STEP 1 & 2: Handle the Join-RFP page
+ * - Fill email in the "Sign up" form
+ * - Wait for "Sign in" button to appear and click it
+ * This redirects to Autodesk login
+ */
+async function handleJoinRfpPage(page, email, outputDir) {
+  const takeShot = async (name) => {
+    try {
+      await page.screenshot({ path: path.join(outputDir, `${name}.png`), fullPage: true })
+      log("INFO", "Screenshot saved", { name })
+    } catch (e) {}
+  }
+
+  log("INFO", "Join-RFP: Filling email in sign-up form")
+  await takeShot("joinrfp_01_start")
+
+  const emailInput = page.locator('input[placeholder="Email"], input[type="email"], input[type="text"]')
+  await emailInput.first().waitFor({ state: "visible", timeout: 30000 })
+  await emailInput.first().click()
+  await emailInput.first().fill("")
+  // Type character by character so React state updates
+  await page.keyboard.type(email, { delay: 80 })
+  await page.waitForTimeout(1500)
+  await takeShot("joinrfp_02_email_filled")
+
+  // Sign in button may be a button or any clickable element - try multiple selectors
+  log("INFO", "Join-RFP: Waiting for Sign in button to appear")
+  const signInBtn = page.locator('div[class*="SignUpButton"]')
+  await signInBtn.waitFor({ state: "visible", timeout: 15000 })
+  await signInBtn.click()
+  log("INFO", "Join-RFP: Clicked Sign in button")
+  await page.waitForTimeout(3000)
+  await takeShot("joinrfp_03_sign_in_clicked")
+}
+
+/**
+ * STEP 3 & 4: Handle Autodesk login
+ * - Fill email → click Next
+ * - Fill password → click Sign in
+ */
+async function handleAutodeskLogin(page, email, password, outputDir) {
+  const takeShot = async (name) => {
+    try {
+      await page.screenshot({ path: path.join(outputDir, `${name}.png`), fullPage: true })
+      log("INFO", "Screenshot saved", { name })
+    } catch (e) {}
+  }
+
+  log("INFO", "Autodesk: Waiting for email field")
+  const emailInput = page.locator('input[type="email"], input[name="email"], input[id="email"]')
+  await emailInput.first().waitFor({ state: "visible", timeout: 30000 })
+  await emailInput.first().click()
+  await emailInput.first().fill(email)
+  await page.waitForTimeout(500)
+  await takeShot("autodesk_01_email_filled")
+
+  log("INFO", "Autodesk: Clicking Next")
+  const nextBtn = page.getByRole("button", { name: "Next", exact: true })
+  await nextBtn.waitFor({ state: "visible", timeout: 15000 })
+  await nextBtn.click()
+  await takeShot("autodesk_02_next_clicked")
+
+  log("INFO", "Autodesk: Waiting for password field")
+  const passwordField = page.locator('input[type="password"]')
+  await passwordField.waitFor({ state: "visible", timeout: 30000 })
+  await passwordField.click()
+  await passwordField.fill(password)
+  await page.waitForTimeout(500)
+  await takeShot("autodesk_03_password_filled")
+
+  log("INFO", "Autodesk: Clicking Sign in")
+  const signInBtn = page.getByRole("button", { name: "Sign in", exact: true })
+  await signInBtn.waitFor({ state: "visible", timeout: 15000 })
+  await signInBtn.click()
+  await page.waitForTimeout(3000)
+  await takeShot("autodesk_04_signed_in")
+}
+
+/**
+ * STEP 5: Handle 2FA - "Confirm sign-in" screen
+ * The code is sent to email, but we skip it by clicking "Use a backup code"
+ */
+async function handle2FA(page, outputDir) {
+  const takeShot = async (name) => {
+    try {
+      await page.screenshot({ path: path.join(outputDir, `${name}.png`), fullPage: true })
+      log("INFO", "Screenshot saved", { name })
+    } catch (e) {}
+  }
+
+  log("INFO", "2FA: Waiting for Confirm sign-in screen")
+  // Wait for 2FA screen
+  await page.waitForSelector('text="Confirm sign-in"', { timeout: 30000 })
+  await takeShot("2fa_01_confirm_screen")
+
+  log("INFO", "2FA: Clicking Use a backup code")
+  const backupLink = page.getByRole("link", { name: "Use a backup code", exact: true })
+  await backupLink.waitFor({ state: "visible", timeout: 15000 })
+  await backupLink.click()
+  await page.waitForTimeout(2000)
+  await takeShot("2fa_02_backup_code_screen")
+}
+
+/**
+ * STEP 6: Enter backup code
+ * The UI has two groups of 4 boxes separated by a "-"
+ * e.g. KTMX - KIXP → 8 individual character boxes
+ */
+async function enterBackupCode(page, outputDir) {
+  const takeShot = async (name) => {
+    try {
+      await page.screenshot({ path: path.join(outputDir, `${name}.png`), fullPage: true })
+      log("INFO", "Screenshot saved", { name })
+    } catch (e) {}
+  }
+
+  log("INFO", "Backup code: Waiting for Enter backup code screen")
+  await page.waitForSelector('text="Enter backup code"', { timeout: 30000 })
+
+  const code = getBackupCode()
+  const cleanCode = code.replace(/-/g, "") // e.g. "KTMXKIXP"
+  log("INFO", "Backup code: Entering code", { code })
+
+  // The page shows individual character input boxes
+  // Find all the small input boxes for the code
+  const codeInputs = page.locator('input[type="text"], input[type="tel"]')
+  await codeInputs.first().waitFor({ state: "visible", timeout: 15000 })
+  const inputCount = await codeInputs.count()
+  log("INFO", "Backup code: Found input boxes", { count: inputCount })
+
+  if (inputCount >= 8) {
+    // Individual character boxes - fill each one
+    for (let i = 0; i < Math.min(inputCount, cleanCode.length); i++) {
+      await codeInputs.nth(i).click()
+      await codeInputs.nth(i).fill(cleanCode[i])
+      await page.waitForTimeout(100)
+    }
+  } else if (inputCount === 2) {
+    // Two boxes: first 4 chars and last 4 chars
+    await codeInputs.nth(0).click()
+    await codeInputs.nth(0).fill(cleanCode.slice(0, 4))
+    await page.waitForTimeout(200)
+    await codeInputs.nth(1).click()
+    await codeInputs.nth(1).fill(cleanCode.slice(4))
+  } else if (inputCount === 1) {
+    // Single box - type full code
+    await codeInputs.first().click()
+    await codeInputs.first().fill(code)
+  } else {
+    // Fallback: type the code with keyboard
+    await codeInputs.first().click()
+    await page.keyboard.type(cleanCode, { delay: 150 })
+  }
+
+  await page.waitForTimeout(1000)
+  await takeShot("backup_01_code_entered")
+
+  log("INFO", "Backup code: Clicking Next")
+  const nextBtn = page.getByRole("button", { name: "Next", exact: true })
+  await nextBtn.waitFor({ state: "visible", timeout: 15000 })
+  await nextBtn.click()
+  await page.waitForTimeout(3000)
+  await takeShot("backup_02_next_clicked")
+
+  return code
+}
+
+/**
+ * STEP 7: Save new backup code
+ * Page shows the new code, checkbox "I saved my backup code", and "Continue" button
+ */
+async function saveNewBackupCode(page, oldCode, outputDir) {
+  const takeShot = async (name) => {
+    try {
+      await page.screenshot({ path: path.join(outputDir, `${name}.png`), fullPage: true })
+      log("INFO", "Screenshot saved", { name })
+    } catch (e) {}
+  }
+
+  log("INFO", "New backup code: Waiting for Save new backup code screen")
+  await page.waitForSelector('text="Save new backup code"', { timeout: 30000 })
+  await takeShot("newcode_01_screen")
+
+  // Scan body text for the new backup code pattern XXXX-XXXX
+  const bodyText = await page.innerText("body")
+  const codePattern = /[A-Z0-9]{4}-[A-Z0-9]{4}/g
+  const matches = [...bodyText.matchAll(codePattern)]
+  const candidates = matches.map(m => m[0]).filter(c => c !== oldCode)
+
+  if (candidates.length > 0) {
+    const newCode = candidates[0]
+    saveBackupCode(newCode)
+    log("INFO", "New backup code captured and saved", { newCode })
+  } else {
+    log("WARN", "Could not find new backup code in page text")
+  }
+
+  // Check the "I saved my backup code" checkbox
+  log("INFO", "New backup code: Checking 'I saved my backup code' checkbox")
+  const checkbox = page.locator('input[type="checkbox"]')
+  await checkbox.waitFor({ state: "visible", timeout: 15000 })
+  await checkbox.click()
+  await page.waitForTimeout(500)
+  await takeShot("newcode_02_checkbox_checked")
+
+  // Click Continue
+  log("INFO", "New backup code: Clicking Continue")
+  const continueBtn = page.getByRole("button", { name: "Continue", exact: true })
+  await continueBtn.waitFor({ state: "visible", timeout: 15000 })
+  await continueBtn.click()
+  await page.waitForTimeout(5000)
+  await takeShot("newcode_03_continued")
 }
 
 export async function downloadOpportunityFiles({
   opportunityUrl,
   outputDir,
   headless = true,
-  useSession = true,
   navTimeoutMs = 60000,
   waitTimeoutMs = 60000,
 }) {
@@ -213,305 +274,194 @@ export async function downloadOpportunityFiles({
   if (!outputDir) return { success: false, error: "Missing outputDir" }
   if (!email || !password) return { success: false, error: "Missing BC_EMAIL or BC_PASSWORD" }
   ensureDir(outputDir)
-  const sessionPath = path.join(process.cwd(), ".bc-session.json")
-  const hasSession = useSession && fs.existsSync(sessionPath)
+
   const userDataDir = path.join(process.cwd(), ".playwright-data")
-  if (!fs.existsSync(userDataDir)) fs.mkdirSync(userDataDir, { recursive: true })
+  ensureDir(userDataDir)
 
   const launchArgs = [
-    '--disable-blink-features=AutomationControlled',
-    '--no-sandbox',
-    '--disable-setuid-sandbox',
-    '--disable-dev-shm-usage',
-    '--disable-accelerated-2d-canvas',
-    '--no-first-run',
-    '--no-zygote',
-    '--single-process',
-    '--disable-gpu'
+    "--disable-blink-features=AutomationControlled",
+    "--no-sandbox",
+    "--disable-setuid-sandbox",
+    "--disable-dev-shm-usage",
+    "--disable-accelerated-2d-canvas",
+    "--no-first-run",
+    "--no-zygote",
+    "--single-process",
+    "--disable-gpu",
   ]
 
-  log("INFO", "Start execution", { opportunityUrl, outputDir, headless, useSession })
-  
+  log("INFO", "Start execution", { opportunityUrl, outputDir, headless })
+
   let context
   let page
   try {
-    const userAgent = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
-    
     context = await chromium.launchPersistentContext(userDataDir, {
       headless,
       args: launchArgs,
       acceptDownloads: true,
-      userAgent,
+      userAgent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
       viewport: { width: 1280, height: 720 },
-      slowMo: headless ? 0 : 200,
-      timeout: 120000 // 2 minute launch timeout
+      slowMo: headless ? 0 : 100,
+      timeout: 120000,
     })
 
     page = context.pages().length > 0 ? context.pages()[0] : await context.newPage()
-    
-    page.on('close', () => log("WARN", "Browser page closed unexpectedly"));
-    page.on('crash', () => log("ERROR", "Browser page crashed"));
-    
-    async function checkForCaptcha(page, contextStr) {
-      const captchaFrames = page.locator('iframe[title="reCAPTCHA"]')
-      const count = await captchaFrames.count()
-      if (count > 0) {
-        let visible = false
-        for (let i = 0; i < count; i++) {
-          if (await captchaFrames.nth(i).isVisible()) {
-            visible = true
-            break
-          }
-        }
-        if (visible) {
-          log("WARN", `CAPTCHA/Security check detected during ${contextStr}`)
-          return true
-        }
-      }
-      if (await page.getByText("Security check", { exact: true }).count() > 0) return true
-      if (await page.getByText("CAPTCHA", { exact: true }).count() > 0) return true
-      return false
-    }
+    page.on("close", () => log("WARN", "Page closed unexpectedly"))
+    page.on("crash", () => log("ERROR", "Page crashed"))
 
-    log("INFO", "Navigating to opportunity page")
+    // Navigate to the opportunity URL
+    log("INFO", "Navigating to opportunity URL")
     await page.goto(opportunityUrl, { waitUntil: "domcontentloaded", timeout: navTimeoutMs })
+    await page.waitForTimeout(3000)
 
+    // Handle EdgePilot redirect if needed
     if (page.url().includes("edgepilot")) {
-        log("INFO", "Detected EdgePilot link, waiting for redirect")
-        await checkForCaptcha(page, "EdgePilot redirect")
-        const redirectBtn = page.getByRole("button", { name: "Select this button if you are not automatically redirected", exact: true })
-        const redirectLink = page.getByRole("link", { name: "Select this button if you are not automatically redirected", exact: true })
-        if ((await redirectBtn.count() > 0 && await redirectBtn.first().isVisible()) || (await redirectLink.count() > 0 && await redirectLink.first().isVisible())) {
-            log("INFO", "Clicking EdgePilot redirect button")
-            if (await redirectBtn.count() > 0 && await redirectBtn.first().isVisible()) {
-              await redirectBtn.first().click()
-            } else {
-              await redirectLink.first().click()
-            }
-        }
-        try {
-            await page.waitForURL(url => !url.includes("edgepilot"), { timeout: 30000 })
-            log("INFO", "Redirected from EdgePilot")
-        } catch (e) {
-            if (page.url().includes("edgepilot")) {
-                log("WARN", "No BuildingConnected redirect")
-                fs.writeFileSync("debug-edgepilot.html", await page.content())
-            }
-        }
-    }
-
-    try {
-      const urlObj = new URL(page.url())
-      if (urlObj.host === "link.edgepilot.com") {
-        const target = urlObj.searchParams.get("u")
-        if (target) {
-          const decodedTarget = decodeURIComponent(target)
-          log("INFO", "Navigating to decoded EdgePilot target")
-          await page.goto(decodedTarget, { waitUntil: "domcontentloaded", timeout: navTimeoutMs })
-        }
-      }
-    } catch (e) {}
-
-    let currentUrl = page.url()
-    let loggedIn = false
-    const isLoginScreen = async () => {
-      const emailField = page.locator('input[type="email"], input[name="email"]')
-      return (await emailField.count() > 0 && await emailField.first().isVisible())
-    }
-    const isJoinRfp = async () => {
+      log("INFO", "EdgePilot redirect detected, waiting")
       try {
-        const urlObj = new URL(page.url())
-        return urlObj.pathname.startsWith("/_/join-rfp")
+        await page.waitForURL((url) => !url.includes("edgepilot"), { timeout: 30000 })
       } catch (e) {
-        return false
-      }
-    }
-    const waitForJoinRfpOrLogin = async () => {
-      const start = Date.now()
-      while (Date.now() - start < 30000) {
-        if (await isLoginScreen()) return
-        if (await isJoinRfp()) return
-        await page.waitForTimeout(1000)
-      }
-    }
-    await waitForJoinRfpOrLogin()
-    currentUrl = page.url()
-    
-    if (currentUrl.includes("login") || currentUrl.includes("signin") || currentUrl.includes("auth") || await isLoginScreen()) {
-      log("INFO", "Login screen detected, performing login")
-      const loginResult = await performLogin(page, email, password, navTimeoutMs, headless, outputDir)
-      loggedIn = loginResult && loginResult.completed2fa
-      await checkForCaptcha(page, "post-login")
-      if (useSession) {
+        // Try to extract the target URL from the edgepilot link
         try {
-          const state = await context.storageState()
-          fs.writeFileSync(sessionPath, JSON.stringify(state))
-          log("INFO", "Session persisted", { sessionPath })
-        } catch (e) {}
+          const urlObj = new URL(page.url())
+          const target = urlObj.searchParams.get("u")
+          if (target) {
+            await page.goto(decodeURIComponent(target), { waitUntil: "domcontentloaded", timeout: navTimeoutMs })
+          }
+        } catch (e2) {}
       }
-      if (!loggedIn) {
-        throw new Error("Backup code flow did not complete")
-      }
-      log("INFO", "Returning to opportunity page after login")
+    }
+
+    log("INFO", "Current URL after navigation", { url: page.url() })
+
+    // PHASE 1: Handle Join-RFP page (the "Sign up" page with email + "I've used BuildingConnected before")
+    // Replace all PHASE 1-5 checks with this loop
+log("INFO", "Starting auth state machine")
+const maxAuthWait = Date.now() + 120000 // 2 min total auth budget
+let usedCode = getBackupCode()
+while (Date.now() < maxAuthWait) {
+  await page.waitForTimeout(1500)
+  const url = page.url()
+  const bodyText = await page.locator("body").innerText().catch(() => "")
+
+  if (bodyText.includes("Save new backup code")) {
+    log("INFO", "State: Save new backup code")
+    const usedCode = getBackupCode()
+    await saveNewBackupCode(page, usedCode, outputDir)
+
+  } else if (bodyText.includes("Enter backup code")) {
+    log("INFO", "State: Enter backup code")
+    usedCode = await enterBackupCode(page, outputDir)
+
+  } else if (bodyText.includes("Confirm sign-in")) {
+    log("INFO", "State: 2FA confirm screen")
+    await handle2FA(page, outputDir)
+
+  } else if (url.includes("autodesk") && bodyText.includes("Welcome")) {
+    log("INFO", "State: Autodesk password screen")
+    const passwordField = page.locator('input[type="password"]')
+    await passwordField.fill(password)
+    await page.getByRole("button", { name: "Sign in", exact: true }).click()
+
+  } else if (url.includes("autodesk") && (bodyText.includes("Sign in") || bodyText.includes("Email"))) {
+    log("INFO", "State: Autodesk email screen")
+    await handleAutodeskLogin(page, email, password, outputDir)
+
+  } else if (bodyText.includes("Sign up for a BuildingConnected") || url.includes("join-rfp")) {
+    log("INFO", "State: Join-RFP sign-up page")
+    await handleJoinRfpPage(page, email, outputDir)
+
+  } else if (url.includes("buildingconnected.com") && !url.includes("join-rfp") && !url.includes("autodesk")) {
+    log("INFO", "State: Logged in to BuildingConnected, proceeding")
+    break
+
+  } else {
+    log("INFO", "State: Unknown, waiting...", { url })
+  }
+}
+
+    // Wait to land on BuildingConnected after all auth
+    log("INFO", "Waiting to land on BuildingConnected app")
+    await page.waitForTimeout(5000)
+    log("INFO", "Current URL after auth", { url: page.url() })
+
+    // If we got redirected away from the opportunity, go back
+    if (!page.url().includes("buildingconnected.com/opportunity") && !page.url().includes("buildingconnected.com/projects")) {
+      log("INFO", "Navigating back to opportunity URL")
       await page.goto(opportunityUrl, { waitUntil: "domcontentloaded", timeout: navTimeoutMs })
-      currentUrl = page.url()
-    }
-    
-    if (currentUrl.includes("join-rfp") || await page.getByRole("button", { name: "Accept Invitation", exact: true }).count() > 0 || await page.getByRole("button", { name: "View Opportunity", exact: true }).count() > 0 || await page.getByRole("button", { name: "View Project", exact: true }).count() > 0 || await page.getByRole("button", { name: "Join Project", exact: true }).count() > 0) {
-        log("INFO", "Landed on Join RFP or Invitation page")
-        try {
-            const usedBeforeBtn = page.getByRole("button", { name: "I’ve used BuildingConnected before", exact: true })
-            const loginLink = page.getByRole("link", { name: "I’ve used BuildingConnected before", exact: true })
-            if (await usedBeforeBtn.count() > 0 && await usedBeforeBtn.first().isVisible()) {
-                log("INFO", "Clicking I’ve used BuildingConnected before")
-                await usedBeforeBtn.first().click()
-                await page.waitForLoadState("networkidle")
-            }
-            if (await loginLink.count() > 0 && await loginLink.first().isVisible()) {
-                log("INFO", "Clicking login link on Join RFP page")
-                await loginLink.first().click()
-                await page.waitForLoadState("networkidle")
-                const loginResult = await performLogin(page, email, password, navTimeoutMs, headless, outputDir)
-                loggedIn = loginResult && loginResult.completed2fa
-                await checkForCaptcha(page, "post-login")
-                if (useSession) {
-                  try {
-                    const state = await context.storageState()
-                    fs.writeFileSync(sessionPath, JSON.stringify(state))
-                    log("INFO", "Session persisted", { sessionPath })
-                  } catch (e) {}
-                }
-                if (!loggedIn) {
-                  throw new Error("Backup code flow did not complete")
-                }
-                log("INFO", "Returning to opportunity page after Join RFP login")
-                await page.goto(opportunityUrl, { waitUntil: "domcontentloaded", timeout: navTimeoutMs })
-            }
-            if (!loggedIn && await isLoginScreen()) {
-              log("INFO", "Join RFP login form detected, performing login")
-              const loginResult = await performLogin(page, email, password, navTimeoutMs, headless, outputDir)
-              loggedIn = loginResult && loginResult.completed2fa
-              await checkForCaptcha(page, "post-login")
-              if (useSession) {
-                try {
-                  const state = await context.storageState()
-                  fs.writeFileSync(sessionPath, JSON.stringify(state))
-                  log("INFO", "Session persisted", { sessionPath })
-                } catch (e) {}
-              }
-              if (!loggedIn) {
-                throw new Error("Backup code flow did not complete")
-              }
-              log("INFO", "Returning to opportunity page after Join RFP login")
-              await page.goto(opportunityUrl, { waitUntil: "domcontentloaded", timeout: navTimeoutMs })
-            }
-
-            const acceptInvitation = page.getByRole("button", { name: "Accept Invitation", exact: true })
-            const viewOpportunity = page.getByRole("button", { name: "View Opportunity", exact: true })
-            const viewProject = page.getByRole("button", { name: "View Project", exact: true })
-            const joinProject = page.getByRole("button", { name: "Join Project", exact: true })
-            const continueBtn = page.getByRole("button", { name: "Continue", exact: true })
-            const acceptBtn = page.getByRole("button", { name: "Accept", exact: true })
-            if (await acceptInvitation.count() > 0 && await acceptInvitation.first().isVisible()) {
-              await acceptInvitation.first().click()
-            } else if (await viewOpportunity.count() > 0 && await viewOpportunity.first().isVisible()) {
-              await viewOpportunity.first().click()
-            } else if (await viewProject.count() > 0 && await viewProject.first().isVisible()) {
-              await viewProject.first().click()
-            } else if (await joinProject.count() > 0 && await joinProject.first().isVisible()) {
-              await joinProject.first().click()
-            } else if (await continueBtn.count() > 0 && await continueBtn.first().isVisible()) {
-              await continueBtn.first().click()
-            } else if (await acceptBtn.count() > 0 && await acceptBtn.first().isVisible()) {
-              await acceptBtn.first().click()
-            }
-            await page.waitForLoadState("networkidle", { timeout: 30000 })
-            await page.waitForTimeout(5000)
-        } catch (e) {
-            log("WARN", "Error handling Join RFP page", { message: e.message })
-        }
+      await page.waitForTimeout(3000)
     }
 
-    if (!loggedIn) {
-      log("ERROR", "Login did not complete before Files step")
-      throw new Error("Login did not complete before Files step")
-    }
-
-    const overviewTab = page.getByRole("tab", { name: "Overview", exact: true })
-    const filesTab = page.getByRole("tab", { name: "Files", exact: true })
-    const messagesTab = page.getByRole("tab", { name: "Messages", exact: true })
-    const bidFormTab = page.getByRole("tab", { name: "Bid Form", exact: true })
-    const startTabs = Date.now()
-    while (Date.now() - startTabs < 30000) {
-      if ((await overviewTab.count() > 0 && await overviewTab.first().isVisible()) ||
-          (await filesTab.count() > 0 && await filesTab.first().isVisible()) ||
-          (await messagesTab.count() > 0 && await messagesTab.first().isVisible()) ||
-          (await bidFormTab.count() > 0 && await bidFormTab.first().isVisible())) {
+    // Handle any post-login invitation buttons (Accept Invitation, View Opportunity, etc.)
+    const postLoginBtns = [
+      "Accept Invitation", "View Opportunity", "View Project", "Join Project", "Continue", "Accept"
+    ]
+    for (const btnName of postLoginBtns) {
+      const btn = page.getByRole("button", { name: btnName, exact: true })
+      if (await btn.count() > 0 && await btn.first().isVisible()) {
+        log("INFO", `Clicking post-login button: ${btnName}`)
+        await btn.first().click()
+        await page.waitForTimeout(3000)
         break
       }
-      await page.waitForTimeout(500)
     }
 
-    log("INFO", "Step 6: Clicking on the Files tab")
-    const filesTabBtn = page.getByRole("button", { name: "Files", exact: true })
-    const filesTabLink = page.getByRole("link", { name: "Files", exact: true })
-    const startFilesTab = Date.now()
-    while (Date.now() - startFilesTab < 30000) {
+    // PHASE 6: Click Files tab
+    log("INFO", "Step 6: Clicking Files tab")
+    const filesTab = page.getByRole("tab", { name: "Files", exact: true })
+    const filesLink = page.getByRole("link", { name: "Files", exact: true })
+
+    // Wait for tabs to appear
+    const tabStart = Date.now()
+    while (Date.now() - tabStart < 30000) {
       if (await filesTab.count() > 0 && await filesTab.first().isVisible()) {
         await filesTab.first().click()
         break
       }
-      if (await filesTabBtn.count() > 0 && await filesTabBtn.first().isVisible()) {
-        await filesTabBtn.first().click()
-        break
-      }
-      if (await filesTabLink.count() > 0 && await filesTabLink.first().isVisible()) {
-        await filesTabLink.first().click()
+      if (await filesLink.count() > 0 && await filesLink.first().isVisible()) {
+        await filesLink.first().click()
         break
       }
       await page.waitForTimeout(500)
     }
     await page.waitForTimeout(3000)
 
-    log("INFO", "Step 7: Clicking on Download All button")
-    const filesReady = page.getByRole("button", { name: "Download All", exact: true })
-    await filesReady.first().waitFor({ state: 'visible', timeout: 30000 })
-    
-    log("INFO", "Triggering download")
+    // PHASE 7: Click Download All
+    log("INFO", "Step 7: Clicking Download All")
+    const downloadAllBtn = page.getByRole("button", { name: "Download All", exact: true })
+    await downloadAllBtn.first().waitFor({ state: "visible", timeout: 30000 })
+
     const [download] = await Promise.all([
       page.waitForEvent("download", { timeout: waitTimeoutMs }),
-      filesReady.first().click({ timeout: waitTimeoutMs }),
+      downloadAllBtn.first().click(),
     ])
+
     const suggested = download.suggestedFilename()
     const finalPath = path.join(outputDir, suggested)
     await download.saveAs(finalPath)
     log("INFO", "Download complete", { path: finalPath })
 
-    try {
-      if (fs.existsSync(sessionPath)) fs.rmSync(sessionPath, { force: true })
-      if (fs.existsSync(userDataDir)) fs.rmSync(userDataDir, { recursive: true, force: true })
-      log("INFO", "Cleared session data")
-    } catch (e) {
-      log("WARN", "Failed to clear session data", { message: e.message })
-    }
-    
+    // Clear session data after successful download
+    clearSessionData()
+
     if (!headless && page && !page.isClosed()) {
-      log("INFO", "Keeping browser open for 5 minutes so you can see the result...")
+      log("INFO", "Keeping browser open for 5 minutes...")
       await page.waitForTimeout(300000)
     }
-    
+
     return { success: true, downloadedFiles: [finalPath], newBackupCode: getBackupCode() }
   } catch (err) {
     log("ERROR", "Automation failed", { message: err.message })
     if (!headless && page && !page.isClosed()) {
-        log("INFO", "Error occurred. Keeping browser open for 5 minutes for debugging...")
-        await page.waitForTimeout(300000)
+      log("INFO", "Error occurred. Keeping browser open for 5 minutes for debugging...")
+      await page.waitForTimeout(300000)
     }
     return { success: false, error: err.message }
   } finally {
-    if (headless) {
-        if (context) await context.close()
+    if (context) {
+      await context.close()
+      await new Promise(r => setTimeout(r, 2000)) // wait for file handles to release
     }
+    clearSessionData()
     log("INFO", "Finished execution")
   }
 }
