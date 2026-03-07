@@ -54,8 +54,10 @@ jobs:
         fi
 
     - name: Clear Session Data
+      shell: pwsh
       run: |
-        rm -rf .playwright-data .bc-session.json
+        Remove-Item .playwright-data -Recurse -Force -ErrorAction SilentlyContinue
+        Remove-Item .bc-session.json -Force -ErrorAction SilentlyContinue
 
     - name: Run Automation Script
       env:
