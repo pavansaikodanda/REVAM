@@ -277,7 +277,7 @@ export async function downloadOpportunityFiles({
   opportunityUrl,
   outputDir,
   headless = true,
-  navTimeoutMs = 60000,
+  navTimeoutMs = 120000,
   waitTimeoutMs = 60000,
 }) {
   const email = process.env.BC_EMAIL
