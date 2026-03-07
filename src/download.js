@@ -35,22 +35,18 @@ function log(level, message, data) {
 
 async function performLogin(page, email, password, timeout, headless, outputDir) {
   try {
-    log("INFO", "Navigating to login page")
-    await page.goto(LOGIN_URL, { waitUntil: "domcontentloaded", timeout: 60000 })
-
     log("INFO", "Filling email")
     const emailInput = page.locator('input[name="email"], input[type="email"]')
     await emailInput.waitFor({ state: "visible", timeout: 30000 })
     await emailInput.fill(email)
+    await page.waitForTimeout(1000)
 
-    log("INFO", "Checking for Next button")
-    const nextBtn = page.locator('button:has-text("Next"), button:has-text("Continue"), #btnNext, #verify_user_btn')
-    if (await nextBtn.isVisible()) {
-      await nextBtn.click()
-      await page.waitForTimeout(3000)
-    }
+    log("INFO", "Step 2: Clicking Next")
+    const nextBtn = page.locator('button:has-text("Next"), button:has-text("Continue"), #btnNext, #verify_user_btn, button:has-text("NEXT")')
+    await nextBtn.click()
+    await page.waitForTimeout(3000)
 
-    log("INFO", "Waiting for password field")
+    log("INFO", "Step 3: Waiting for password and Sign In")
     const passwordField = page.locator('input[name="password"], input[type="password"]')
     
     let passVisible = false
@@ -61,9 +57,8 @@ async function performLogin(page, email, password, timeout, headless, outputDir)
         passVisible = true
         break
       }
-      const secondNext = page.locator('button:has-text("Next"), button:has-text("Continue"), #btnNext, #verify_user_btn')
+      const secondNext = page.locator('button:has-text("Next"), button:has-text("Continue"), #btnNext, #verify_user_btn, button:has-text("NEXT")')
       if (await secondNext.isVisible()) {
-        log("INFO", "Clicking second Next button")
         await secondNext.click()
         await page.waitForTimeout(3000)
       }
@@ -74,15 +69,13 @@ async function performLogin(page, email, password, timeout, headless, outputDir)
         throw new Error("Password field never appeared")
     }
 
-    log("INFO", "Filling password")
     await passwordField.fill(password)
     await page.waitForTimeout(1000)
 
-    log("INFO", "Submitting login")
-    const submitBtn = page.locator('button[type="submit"], #btnSubmit')
+    const submitBtn = page.locator('button[type="submit"], #btnSubmit, button:has-text("Sign in"), button:has-text("Sign In")')
     await submitBtn.click()
     
-    log("INFO", "Waiting for 2FA screen")
+    log("INFO", "Step 4: Checking for 2FA screen and clicking 'Use a backup code'")
     const twofaStart = Date.now()
     let found2fa = false
     while (Date.now() - twofaStart < 30000) {
@@ -102,11 +95,9 @@ async function performLogin(page, email, password, timeout, headless, outputDir)
     }
 
     if (found2fa && !page.isClosed()) {
-      log("INFO", "2FA Screen Detected")
-      
       const backupLink = page.locator('a:has-text("Use a backup code"), button:has-text("Use a backup code"), text="Use backup code"')
       if (await backupLink.isVisible()) {
-        log("INFO", "Clicking backup link")
+        log("INFO", "Clicking 'Use a backup code' link")
         await backupLink.click()
         await page.waitForTimeout(5000)
       }
@@ -114,7 +105,7 @@ async function performLogin(page, email, password, timeout, headless, outputDir)
       const backupInput = page.locator('input[type="tel"], input[aria-label*="code"], input[name*="code"], input[id*="code"]')
       if (await backupInput.count() > 0) {
         let code = getBackupCode()
-        log("INFO", "Entering code character by character", { code })
+        log("INFO", "Entering backup code", { code })
         await backupInput.first().focus()
         const cleanCode = code.replace("-", "")
         await page.keyboard.type(cleanCode, { delay: 250 })
@@ -122,14 +113,12 @@ async function performLogin(page, email, password, timeout, headless, outputDir)
 
         const next = page.locator('button:has-text("Next"), button:has-text("Verify"), button:has-text("Submit"), button[type="submit"]')
         if (await next.isVisible()) {
-          log("INFO", "Clicking Next on 2FA")
           await next.click()
         } else {
-          log("INFO", "Pressing Enter on 2FA")
           await page.keyboard.press("Enter")
         }
         
-        log("INFO", "Waiting for post-2FA screen (new code capture)")
+        log("INFO", "Step 5: Waiting for post-2FA screen (capture new code and Continue)")
         await page.waitForTimeout(10000)
 
         log("INFO", "Scanning for new backup code")
@@ -141,12 +130,19 @@ async function performLogin(page, email, password, timeout, headless, outputDir)
         if (candidates.length > 0) {
           const newCode = candidates[0]
           saveBackupCode(newCode)
-          log("INFO", "SUCCESS: Captured new backup code", { newCode })
+          log("INFO", "Captured new backup code", { newCode })
           
-          const checkbox = page.locator('input[type="checkbox"], label:has-text("I saved my backup code")')
-          if (await checkbox.count() > 0) await checkbox.first().click()
+          const checkbox = page.locator('input[type="checkbox"], label:has-text("I saved my backup code"), label:has-text("I have saved my backup code")')
+          if (await checkbox.count() > 0) {
+              log("INFO", "Checking 'I saved my backup code' checkbox")
+              await checkbox.first().click()
+          }
+          
           const continueBtn = page.locator('button:has-text("Continue"), button:has-text("Done"), button:has-text("Next")')
-          if (await continueBtn.isVisible()) await continueBtn.click()
+          if (await continueBtn.isVisible()) {
+              log("INFO", "Clicking Continue")
+              await continueBtn.click()
+          }
           await page.waitForTimeout(5000)
         }
       }
@@ -275,9 +271,17 @@ export async function downloadOpportunityFiles({
         }
     }
 
+    // Step 1: Check if we are on a login screen (either BC or Autodesk)
+    const isLoginScreen = async () => {
+        const emailInput = page.locator('input[name="email"], input[type="email"]')
+        const nextBtn = page.locator('button:has-text("Next"), button:has-text("Continue"), #btnNext, #verify_user_btn, button:has-text("NEXT")')
+        return (await emailInput.count() > 0 && await emailInput.first().isVisible()) && 
+               (await nextBtn.count() > 0 && await nextBtn.first().isVisible())
+    }
+
     let currentUrl = page.url()
-    if (currentUrl.includes("login") || currentUrl.includes("signin") || currentUrl.includes("auth")) {
-       log("INFO", "Redirected to auth page, re-attempting login")
+    if (currentUrl.includes("login") || currentUrl.includes("signin") || currentUrl.includes("auth") || await isLoginScreen()) {
+       log("INFO", "Login screen detected, performing login")
        await performLogin(page, email, password, navTimeoutMs, headless, outputDir)
        await checkForCaptcha(page, "re-login")
        
@@ -288,7 +292,11 @@ export async function downloadOpportunityFiles({
           log("INFO", "Session refreshed")
         } catch (e) {}
        }
-       await page.goto(opportunityUrl, { waitUntil: "domcontentloaded", timeout: navTimeoutMs })
+       
+       // After login, ensure we are back on the opportunity URL if needed
+       if (!page.url().includes(opportunityUrl.split('?')[0])) {
+           await page.goto(opportunityUrl, { waitUntil: "domcontentloaded", timeout: navTimeoutMs })
+       }
        currentUrl = page.url()
     }
     
@@ -300,9 +308,7 @@ export async function downloadOpportunityFiles({
                 log("INFO", "Clicking login link on Join RFP page")
                 await loginLink.first().click()
                 await page.waitForLoadState("networkidle")
-                if (page.url().includes("login") || page.url().includes("signin")) {
-                    await performLogin(page, email, password, navTimeoutMs, headless, outputDir)
-                }
+                await performLogin(page, email, password, navTimeoutMs, headless, outputDir)
             }
 
             const acceptBtn = page.locator('button:has-text("Accept Invitation"), button:has-text("View Opportunity"), button:has-text("View Project"), button:has-text("Join Project"), button:has-text("Continue"), button:has-text("Accept")')
@@ -318,50 +324,24 @@ export async function downloadOpportunityFiles({
         }
     }
 
-    let filesReady = page.locator('button:has-text("Download All"), button:has-text("Download all")')
+    log("INFO", "Step 6: Clicking on the Files tab")
+    const filesTab = page.locator('a:has-text("Files"), button:has-text("Files"), div[role="tab"]:has-text("Files"), [data-test="files-tab"]')
     try {
-      await filesReady.waitFor({ state: 'visible', timeout: 10000 })
-    } catch {
-      log("INFO", "Searching for Files tab")
-      const filesTab = page.locator('a:has-text("Files"), button:has-text("Files"), div[role="tab"]:has-text("Files"), [data-test="files-tab"]')
-      const count = await filesTab.count()
-      if (count > 0) {
-        for (let i = 0; i < count; i++) {
-             if (await filesTab.nth(i).isVisible()) {
-                 await filesTab.nth(i).click()
-                 await page.waitForTimeout(2000)
-                 break
-             }
-        }
-      }
-      filesReady = page.locator('button:has-text("Download All"), button:has-text("Download all")')
-      try {
-          await filesReady.waitFor({ state: 'visible', timeout: 15000 })
-      } catch (e) {
-          const docTab = page.locator('a:has-text("Documents"), [data-test="documents-tab"]')
-          if (await docTab.count() > 0 && await docTab.first().isVisible()) {
-              await docTab.first().click()
-              await page.waitForTimeout(2000)
-          }
-          filesReady = page.locator('button:has-text("Download All"), button:has-text("Download all")')
-          try {
-              await filesReady.waitFor({ state: 'visible', timeout: 10000 })
-          } catch (e2) {
-              const dlIcon = page.locator('button i.icon-download, button svg[data-icon="download"], button[aria-label*="Download"]')
-              if (await dlIcon.count() > 0 && await dlIcon.first().isVisible()) {
-                  filesReady = dlIcon.first()
-              } else {
-                  fs.writeFileSync("debug-files-page.html", await page.content())
-                  throw e2
-              }
-          }
-        }
+        await filesTab.first().waitFor({ state: "visible", timeout: 20000 })
+        await filesTab.first().click()
+        await page.waitForTimeout(3000)
+    } catch (e) {
+        log("WARN", "Files tab not found or not clickable, checking if already on Files page")
     }
+
+    log("INFO", "Step 7: Clicking on Download All button")
+    const filesReady = page.locator('button:has-text("Download All"), button:has-text("Download all")')
+    await filesReady.first().waitFor({ state: 'visible', timeout: 20000 })
     
     log("INFO", "Triggering download")
     const [download] = await Promise.all([
       page.waitForEvent("download", { timeout: waitTimeoutMs }),
-      filesReady.click({ timeout: waitTimeoutMs }),
+      filesReady.first().click({ timeout: waitTimeoutMs }),
     ])
     const suggested = download.suggestedFilename()
     const finalPath = path.join(outputDir, suggested)
