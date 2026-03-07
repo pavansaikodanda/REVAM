@@ -335,13 +335,26 @@ export async function downloadOpportunityFiles({
     }
 
     log("INFO", "Step 7: Clicking on Download All button")
-    const filesReady = page.locator('button:has-text("Download All"), button:has-text("Download all")')
-    await filesReady.first().waitFor({ state: 'visible', timeout: 20000 })
+    const filesReady = page.locator('button:has-text("Download All"), button:has-text("Download all"), button:has-text("Download"), [data-test*="download-all"], .btn-download-all')
+    
+    try {
+        await filesReady.first().waitFor({ state: 'visible', timeout: 30000 })
+    } catch (e) {
+        log("WARN", "Download All button not found, checking for any download-related element")
+        const anyDl = page.locator('button:has-text("Download"), a:has-text("Download"), [aria-label*="Download"], .icon-download')
+        if (await anyDl.count() > 0) {
+            log("INFO", "Found a download element, clicking it")
+            await anyDl.first().click()
+        } else {
+            fs.writeFileSync("debug-files-page-final.html", await page.content())
+            throw new Error("Could not find any download button on the Files page. Please check the debug HTML.")
+        }
+    }
     
     log("INFO", "Triggering download")
     const [download] = await Promise.all([
       page.waitForEvent("download", { timeout: waitTimeoutMs }),
-      filesReady.first().click({ timeout: waitTimeoutMs }),
+      filesReady.first().isVisible().then(visible => visible ? filesReady.first().click() : null),
     ])
     const suggested = download.suggestedFilename()
     const finalPath = path.join(outputDir, suggested)
