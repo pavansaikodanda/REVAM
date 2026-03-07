@@ -110,10 +110,19 @@ async function handleAutodeskLogin(page, email, password, outputDir) {
   await takeShot("autodesk_02_next_clicked")
 
   log("INFO", "Autodesk: Waiting for password field")
-  const passwordField = page.locator('input[type="password"]')
-  await passwordField.waitFor({ state: "visible", timeout: 30000 })
-  await passwordField.click()
-  await passwordField.fill(password)
+  const passwordField = page.locator('input[type="password"]:not([disabled])')
+  try {
+    await passwordField.first().waitFor({ state: "visible", timeout: 30000 })
+  } catch (e) {
+    const disabledPassword = page.locator('input[type="password"]')
+    if (await disabledPassword.count() > 0) {
+      await takeShot("autodesk_03_password_disabled")
+      throw new Error("Autodesk password field is disabled")
+    }
+    throw e
+  }
+  await passwordField.first().click()
+  await passwordField.first().fill(password)
   await page.waitForTimeout(500)
   await takeShot("autodesk_03_password_filled")
 
