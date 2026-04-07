@@ -395,6 +395,7 @@ while (Date.now() < maxAuthWait) {
   } else if (url.includes("autodesk") && (bodyText.includes("Sign in") || bodyText.includes("Email"))) {
     log("INFO", "State: Autodesk email screen")
     await handleAutodeskLogin(page, email, password, outputDir)
+    await page.waitForURL(url => !url.includes("autodesk") || url.includes("2fa") || url.includes("backup"), { timeout: 30000 }).catch(() => {})
 
   } else if (bodyText.includes("Sign up for a BuildingConnected") || url.includes("join-rfp")) {
     log("INFO", "State: Join-RFP sign-up page")
