@@ -366,6 +366,7 @@ export async function downloadOpportunityFiles({
 log("INFO", "Starting auth state machine")
 const maxAuthWait = Date.now() + 120000 // 2 min total auth budget
 let usedCode = getBackupCode()
+let autodeskLoginDone = false
 while (Date.now() < maxAuthWait) {
   await page.waitForTimeout(1500)
   const url = page.url()
@@ -384,18 +385,19 @@ while (Date.now() < maxAuthWait) {
     log("INFO", "State: 2FA confirm screen")
     await handle2FA(page, outputDir)
 
-  } else if (url.includes("autodesk") && await page.locator('input[type="password"]').count() > 0) {
+  } else if (!autodeskLoginDone && url.includes("autodesk") && await page.locator('input[type="password"]').count() > 0) {
     log("INFO", "State: Autodesk password screen")
     const passwordField = page.locator('input[type="password"]:not([disabled])')
     await passwordField.waitFor({ state: "visible", timeout: 15000 })
     await passwordField.fill(password)
     await page.waitForTimeout(500)
     await page.getByRole("button", { name: "Sign in", exact: true }).click()
+    autodeskLoginDone = true
 
-  } else if (url.includes("autodesk") && (bodyText.includes("Sign in") || bodyText.includes("Email"))) {
+  } else if (!autodeskLoginDone && url.includes("autodesk") && (bodyText.includes("Sign in") || bodyText.includes("Email"))) {
     log("INFO", "State: Autodesk email screen")
     await handleAutodeskLogin(page, email, password, outputDir)
-    await page.waitForURL(url => !url.includes("autodesk") || url.includes("2fa") || url.includes("backup"), { timeout: 30000 }).catch(() => {})
+    autodeskLoginDone = true
 
   } else if (bodyText.includes("Sign up for a BuildingConnected") || url.includes("join-rfp")) {
     log("INFO", "State: Join-RFP sign-up page")
