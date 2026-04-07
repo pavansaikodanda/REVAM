@@ -329,8 +329,17 @@ export async function downloadOpportunityFiles({
     page.on("crash", () => log("ERROR", "Page crashed"))
 
     // Navigate to the opportunity URL
-    log("INFO", "Navigating to opportunity URL")
-    await page.goto(opportunityUrl, { waitUntil: "domcontentloaded", timeout: navTimeoutMs })
+   log("INFO", "Navigating to opportunity URL")
+    let targetUrl = opportunityUrl
+    try {
+      const urlObj = new URL(opportunityUrl)
+      const u = urlObj.searchParams.get("u")
+      if (u) {
+        targetUrl = decodeURIComponent(u)
+        log("INFO", "Extracted direct URL from edgepilot link", { targetUrl })
+      }
+    } catch (e) {}
+    await page.goto(targetUrl, { waitUntil: "domcontentloaded", timeout: navTimeoutMs })
     await page.waitForTimeout(3000)
 
     // Handle EdgePilot redirect if needed
