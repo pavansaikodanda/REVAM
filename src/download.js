@@ -409,6 +409,9 @@ while (Date.now() < maxAuthWait) {
 
   } else {
     log("INFO", "State: Unknown, waiting...", { url })
+    try {
+      await page.screenshot({ path: path.join(outputDir, `unknown_state_${Date.now()}.png`), fullPage: true })
+    } catch(e) {}
   }
 }
 
