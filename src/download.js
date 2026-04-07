@@ -375,13 +375,12 @@ while (Date.now() < maxAuthWait) {
     log("INFO", "State: 2FA confirm screen")
     await handle2FA(page, outputDir)
 
-  } else if (url.includes("autodesk") && bodyText.includes("Welcome")) {
+  } else if (url.includes("autodesk") && await page.locator('input[type="password"]').count() > 0) {
     log("INFO", "State: Autodesk password screen")
-    const passwordField = page.locator('input[type="password"]')
+    const passwordField = page.locator('input[type="password"]:not([disabled])')
+    await passwordField.waitFor({ state: "visible", timeout: 15000 })
     await passwordField.fill(password)
-    await page.waitForTimeout(2000 + Math.random() * 1000) // add this line
     await page.waitForTimeout(500)
-    await takeShot("autodesk_03_password_filled")
     await page.getByRole("button", { name: "Sign in", exact: true }).click()
 
   } else if (url.includes("autodesk") && (bodyText.includes("Sign in") || bodyText.includes("Email"))) {
