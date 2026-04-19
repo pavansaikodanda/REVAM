@@ -476,8 +476,6 @@ while (Date.now() < maxAuthWait) {
     await download.saveAs(finalPath)
     log("INFO", "Download complete", { path: finalPath })
 
-    // Clear session data after successful download
-    clearSessionData()
 
     if (!headless && page && !page.isClosed()) {
       log("INFO", "Keeping browser open for 5 minutes...")
@@ -497,7 +495,6 @@ while (Date.now() < maxAuthWait) {
       await context.close()
       await new Promise(r => setTimeout(r, 2000)) // wait for file handles to release
     }
-    clearSessionData()
     log("INFO", "Finished execution")
   }
 }
